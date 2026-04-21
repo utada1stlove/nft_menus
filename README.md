@@ -18,16 +18,21 @@
 ├── nft-dns-forward-stats.sh      # 独立流量统计工具
 ├── nft-dns-forward.conf.example  # 配置文件示例
 ├── nftables.sh                   # 静态 IP 端口转发管理（独立工具）
-└── install.sh                    # 一键安装脚本
+├── install.sh                    # 一键安装脚本
+└── uninstall.sh                  # 一键卸载脚本
 ```
 
 ## 快速安装
 
+> 使用 HTTPS 下载 zip 包，无需 git，不留 clone 记录。
+
 ```bash
-git clone https://github.com/utada1stlove/nft_menus.git
-cd nft_menus
-chmod +x install.sh
-sudo bash install.sh
+curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/main.zip \
+  && unzip -q /tmp/nft_menus.zip -d /tmp \
+  && cd /tmp/nft_menus-main \
+  && bash install.sh \
+  && cd / \
+  && rm -rf /tmp/nft_menus.zip /tmp/nft_menus-main
 ```
 
 安装完成后：
@@ -40,22 +45,50 @@ sudo nft-dns-forward
 sudo nft-dns-stats live
 ```
 
+## 卸载
+
+```bash
+curl -Lo /tmp/uninstall.sh https://raw.githubusercontent.com/utada1stlove/nft_menus/main/uninstall.sh \
+  && bash /tmp/uninstall.sh \
+  && rm -f /tmp/uninstall.sh
+```
+
+或者如果安装目录还在：
+
+```bash
+sudo bash /opt/nft-dns-forward/uninstall.sh
+```
+
+卸载内容包括：
+- 停止并删除 systemd timer / service
+- 清除所有 nftables 转发规则和限速表
+- 删除安装目录 `/opt/nft-dns-forward`
+- 删除命令软链接（`nft-dns-forward` / `nft-dns-stats` / `nft-dns-sync`）
+- 删除 sysctl 配置文件（IP 转发设置）
+- 可选删除流量日志 `/var/log/nft-dns-forward-stats.log`
+
 ## 手动安装
 
 ```bash
-# 1. 安装依赖
+# 1. 下载解压
+curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/main.zip
+unzip -q /tmp/nft_menus.zip -d /tmp
+cd /tmp/nft_menus-main
+
+# 2. 安装依赖
 apt install -y nftables bc python3   # Debian/Ubuntu
 # 或
 dnf install -y nftables bc python3   # CentOS/Rocky
 
-# 2. 复制配置文件
+# 3. 复制配置文件并编辑
 cp nft-dns-forward.conf.example nft-dns-forward.conf
-
-# 3. 编辑配置（见下方格式说明）
 vim nft-dns-forward.conf
 
 # 4. 运行菜单（需 root）
 sudo bash nft-dns-forward-menu.sh
+
+# 5. 清理临时文件（可选）
+rm -rf /tmp/nft_menus.zip /tmp/nft_menus-main
 ```
 
 ## 配置文件格式
