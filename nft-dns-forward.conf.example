@@ -1,0 +1,22 @@
+# name|listen_port|target_host|target_port|source_ip|family
+#
+# name:
+#   Rule name, only letters/numbers/._- are allowed.
+#
+# listen_port:
+#   Local public port on this machine.
+#
+# target_host:
+#   Domain or IP of the backend server.
+#
+# target_port:
+#   Backend TCP port.
+#
+# source_ip:
+#   The source IP you want SNAT to.
+#   This usually must be an IP that already exists on the forwarding machine.
+#
+# family:
+#   4, 6, or auto. If auto, the script infers it from source_ip.
+
+cloud-a|44288|example.com|51312|10.0.0.10|4
