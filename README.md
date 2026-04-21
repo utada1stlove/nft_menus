@@ -260,6 +260,47 @@ tcp dport 9002 meter cloud-d-lmt { ip saddr limit rate 10 mbytes/second } drop
 - Linux 内核 >= 4.18（nftables NAT 支持）
 - 已测试系统：Debian 11/12、Ubuntu 20.04/22.04、CentOS 8/9、Rocky Linux 8/9
 
+## 历史版本
+
+| 分支 | 版本 | 说明 |
+|------|------|------|
+| [`main`](https://github.com/utada1stlove/nft_menus/tree/main) | v2.0（当前） | 动态域名转发 + 流量统计 + 时段限速 + 一键安装/卸载 |
+| [`older`](https://github.com/utada1stlove/nft_menus/tree/older) | v1.0 | 原始版本，静态 IP 转发 + 基础域名转发，无统计无限速 |
+
+### 安装旧版（older 分支）
+
+```bash
+curl -Lo /tmp/nft_older.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/older.zip \
+  && unzip -q /tmp/nft_older.zip -d /tmp \
+  && cd /tmp/nft_menus-older \
+  && cp nft-dns-forward.conf.example nft-dns-forward.conf \
+  && chmod +x nftables.sh nft-dns-forward-menu.sh nft-dns-forward-sync.sh
+# 然后直接运行对应脚本，详见 older 分支 README
+```
+
+### 卸载旧版
+
+```bash
+# 停止 timer
+systemctl stop nft-dns-forward-sync.timer 2>/dev/null || true
+systemctl disable nft-dns-forward-sync.timer 2>/dev/null || true
+rm -f /etc/systemd/system/nft-dns-forward-sync.{timer,service}
+systemctl daemon-reload
+
+# 清除 nftables 规则
+nft delete table ip   richang_dns_forward_v4     2>/dev/null || true
+nft delete table ip6  richang_dns_forward_v6     2>/dev/null || true
+nft delete table ip   richang_port_forward_v4     2>/dev/null || true
+nft delete table ip6  richang_port_forward_v6     2>/dev/null || true
+nft delete table inet richang_port_forward_filter 2>/dev/null || true
+
+# 删除文件
+rm -f /etc/nftables/richang-port-forward.nft
+rm -f /etc/sysctl.d/99-richang-ip-forward.conf
+rm -f /etc/sysctl.d/99-ip-forward.conf
+rm -rf /tmp/nft_menus-older /tmp/nft_older.zip
+```
+
 ## License
 
 MIT
