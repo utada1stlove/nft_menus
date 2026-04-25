@@ -501,11 +501,11 @@ render_apply_batch() {
 format_bytes() {
     local bytes="$1"
     if [ "$bytes" -ge 1073741824 ]; then
-        printf '%.2f GB' "$(echo "scale=2; $bytes/1073741824" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f GB", bytes / 1073741824 }'
     elif [ "$bytes" -ge 1048576 ]; then
-        printf '%.2f MB' "$(echo "scale=2; $bytes/1048576" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f MB", bytes / 1048576 }'
     elif [ "$bytes" -ge 1024 ]; then
-        printf '%.2f KB' "$(echo "scale=2; $bytes/1024" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f KB", bytes / 1024 }'
     else
         printf '%s B' "$bytes"
     fi
@@ -551,7 +551,7 @@ stats_rules() {
     local found=0
 
     # 收集 prerouting (RX) 和 postrouting (TX) 两个方向
-    declare -A rx_pkts rx_bytes tx_pkts tx_bytes
+    declare -A rx_pkts=() rx_bytes=() tx_pkts=() tx_bytes=()
 
     while IFS='|' read -r name pkts byts; do
         [ -z "$name" ] && continue
@@ -581,7 +581,7 @@ stats_rules() {
     printf '%s\n' "$(printf '─%.0s' {1..80})"
 
     # 合并所有规则名
-    declare -A seen
+    declare -A seen=()
     for name in "${!rx_pkts[@]}" "${!tx_pkts[@]}"; do
         seen["$name"]=1
     done
