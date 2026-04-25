@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SYNC_SCRIPT="${SCRIPT_DIR}/nft-dns-forward-sync.sh"
 STATS_SCRIPT="${SCRIPT_DIR}/nft-dns-forward-stats.sh"
@@ -10,7 +10,7 @@ CONFIG_FILE="${NFT_DNS_FORWARD_CONFIG:-${SCRIPT_DIR}/nft-dns-forward.conf}"
 TABLE_V4="richang_dns_forward_v4"
 TABLE_V6="richang_dns_forward_v6"
 LIMIT_TABLE="richang_dns_forward_limit"
-SYSCTL_FILE="/etc/sysctl.d/99-ip-forward.conf"
+SYSCTL_FILE="/etc/sysctl.d/99-nft-dns-forward.conf"
 SERVICE_FILE="/etc/systemd/system/nft-dns-forward-sync.service"
 TIMER_FILE="/etc/systemd/system/nft-dns-forward-sync.timer"
 STATS_LOG="/var/log/nft-dns-forward-stats.log"
@@ -71,7 +71,19 @@ validate_ipv4() {
 }
 
 validate_ipv6() {
-    [[ "$1" == *:* ]]
+    local ip="$1"
+    [[ "$ip" == *:* ]] || return 1
+    [[ "$ip" =~ ^[Ff][Ee][89AaBb] ]] && return 1
+    [[ "$ip" == "::1" ]] && return 1
+    [[ "${#ip}" -le 39 ]] || return 1
+    [[ "$ip" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+    [[ "$ip" == *:::* ]] && return 1
+    local dcolon_count
+    dcolon_count=$(printf '%s' "$ip" | tr -cd ':' | wc -c)
+    [ "$dcolon_count" -le 7 ] || return 1
+    dcolon_count=$(printf '%s' "$ip" | grep -o '::' | wc -l)
+    [[ "$dcolon_count" -le 1 ]] || return 1
+    return 0
 }
 
 validate_rate_limit() {
@@ -118,16 +130,30 @@ config_has_name() {
     return 1
 }
 
-# 检查监听端口是否已存在
-config_has_port() {
-    local target_port="$1" name listen_port
-    while IFS='|' read -r name listen_port _; do
+# 检查监听端口是否在同一协议族中已存在
+config_has_port_for_family() {
+    local target_port="$1"
+    local target_family="$2"
+    local name listen_port _target_host _target_port source_ip family
+
+    while IFS='|' read -r name listen_port _target_host _target_port source_ip family _; do
         name="${name#"${name%%[![:space:]]*}"}"
         [ -z "$name" ] && continue
         case "$name" in \#*) continue ;; esac
         listen_port="${listen_port#"${listen_port%%[![:space:]]*}"}"
         listen_port="${listen_port%"${listen_port##*[![:space:]]}"}"
-        [ "$listen_port" = "$target_port" ] && return 0
+
+        family=$(sanitize_input "${family:-auto}")
+        source_ip=$(sanitize_input "${source_ip:-}")
+        if [ "$family" = "auto" ]; then
+            if validate_ipv4 "$source_ip"; then
+                family="4"
+            elif validate_ipv6 "$source_ip"; then
+                family="6"
+            fi
+        fi
+
+        [ "$listen_port" = "$target_port" ] && [ "$family" = "$target_family" ] && return 0
     done < "$CONFIG_FILE"
     return 1
 }
@@ -234,7 +260,6 @@ add_rule() {
     read -r -p "本机监听端口: " listen_port
     listen_port=$(sanitize_input "$listen_port")
     validate_port "$listen_port" || { print_color "CRED" "[错误] 监听端口无效"; return 1; }
-    config_has_port "$listen_port" && { print_color "CRED" "[错误] 监听端口已被其他规则占用"; return 1; }
 
     # 目标
     read -r -p "目标域名或 IP: " target_host
@@ -272,6 +297,30 @@ add_rule() {
     if [ "$family" = "auto" ] && ! validate_ipv4 "$source_ip" && ! validate_ipv6 "$source_ip"; then
         print_color "CRED" "[错误] auto 模式下仍然需要一个有效的 source_ip"; return 1
     fi
+
+    local effective_family="$family"
+    if [ "$effective_family" = "auto" ]; then
+        if validate_ipv4 "$source_ip"; then
+            effective_family="4"
+        else
+            effective_family="6"
+        fi
+    fi
+
+    # 校验 source_ip 必须是本机已有地址
+    if command -v ip >/dev/null 2>&1; then
+        local addr_prefix="32"
+        if [ "$effective_family" = "6" ]; then
+            addr_prefix="128"
+        fi
+        if ! ip -o -"$effective_family" addr show scope global to "${source_ip}/${addr_prefix}" >/dev/null 2>&1; then
+            print_color "CRED" "[错误] source_ip '$source_ip' 不是本机已有地址，请通过 ip addr 确认"
+            return 1
+        fi
+    fi
+
+    config_has_port_for_family "$listen_port" "$effective_family" \
+        && { print_color "CRED" "[错误] 监听端口已被同协议族的其他规则占用"; return 1; }
 
     # 限速（可选）
     echo
@@ -420,7 +469,7 @@ EOF
 
 # 手动启用/停用限速
 enable_limit_manual() {
-    print_color "CGREEN" "[信息] 正在启用限速规则（重新 sync）..."
+    print_color "CGREEN" "[信息] 正在强制启用限速规则（忽略时间段判断，立即生效）..."
     bash "$SYNC_SCRIPT" enable-limit "$CONFIG_FILE"
 }
 
@@ -525,7 +574,7 @@ show_menu() {
     echo "  8. 清空所有生效规则"
     echo ""
     print_color "CBLUE" " ── 限速管理 ──"
-    echo "  r. 手动启用限速规则"
+    echo "  r. 手动启用限速规则（忽略时间段）"
     echo "  s. 手动停用限速规则"
     echo ""
     print_color "CBLUE" " ── 流量统计 ──"
@@ -543,6 +592,7 @@ main() {
     check_root
     require_command bash
     require_command getent
+    require_command ip
     ensure_config_file
 
     while true; do

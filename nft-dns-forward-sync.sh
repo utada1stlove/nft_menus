@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.1.0"
 TABLE_V4="richang_dns_forward_v4"
 TABLE_V6="richang_dns_forward_v6"
 LIMIT_TABLE="richang_dns_forward_limit"
@@ -51,7 +51,25 @@ validate_ipv4() {
 }
 
 validate_ipv6() {
-    [[ "$1" == *:* ]]
+    local ip="$1"
+    # 必须包含冒号（IPv6 基本特征）
+    [[ "$ip" == *:* ]] || return 1
+    # 不允许链路本地地址（fe80::/10）作为转发出口
+    [[ "$ip" =~ ^[Ff][Ee][89AaBb] ]] && return 1
+    # 不允许环回
+    [[ "$ip" == "::1" ]] && return 1
+    # 基本结构：只允许十六进制数字、冒号、点（IPv4-mapped），最长 39 字符
+    [[ "${#ip}" -le 39 ]] || return 1
+    [[ "$ip" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+    # 不允许连续三个以上冒号
+    [[ "$ip" == *:::* ]] && return 1
+    # 最多只能有一个 :: 压缩段
+    local dcolon_count
+    dcolon_count=$(printf '%s' "$ip" | tr -cd ':' | wc -c)
+    [ "$dcolon_count" -le 7 ] || return 1
+    dcolon_count=$(printf '%s' "$ip" | grep -o '::' | wc -l)
+    [[ "$dcolon_count" -le 1 ]] || return 1
+    return 0
 }
 
 # 验证限速格式: 数字 + mbps/kbps/mbit/kbit
@@ -102,6 +120,35 @@ escape_nft_string() {
     value="${value//\\/\\\\}"
     value="${value//\"/\\\"}"
     printf '%s' "$value"
+}
+
+# ─── 本机地址校验 ────────────────────────────────────────────────────────────
+
+# 列出本机所有全局 IPv4 地址
+_local_ipv4_list() {
+    ip -o -4 addr show scope global 2>/dev/null \
+        | awk '{split($4,a,"/"); print a[1]}'
+}
+
+# 列出本机所有全局 IPv6 地址
+_local_ipv6_list() {
+    ip -o -6 addr show scope global 2>/dev/null \
+        | awk '{split($4,a,"/"); print a[1]}'
+}
+
+# 判断给定 IP 是否属于本机已有地址
+validate_local_ip() {
+    local target="$1"
+
+    if validate_ipv4 "$target"; then
+        ip -o -4 addr show scope global to "${target}/32" >/dev/null 2>&1
+        return $?
+    elif validate_ipv6 "$target"; then
+        ip -o -6 addr show scope global to "${target}/128" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 1
 }
 
 # ─── IP / Family 工具 ────────────────────────────────────────────────────────
@@ -197,9 +244,14 @@ comment_for_rule() {
 parse_config() {
     local config_file="$1"
     local mode="$2"
+    # 第三个可选参数：force_limit=1 时强制所有限速规则生效（忽略 schedule 判断）
+    local force_limit="${3:-0}"
     local line_no=0
 
     [ -f "$config_file" ] || die "config not found: $config_file"
+
+    # 用于重复检测的关联数组
+    declare -A _seen_names _seen_ports
 
     while IFS= read -r raw_line || [ -n "$raw_line" ]; do
         line_no=$((line_no + 1))
@@ -245,11 +297,26 @@ parse_config() {
 
         family=$(infer_family "$source_ip" "$family")
 
+        # 重复规则名检测
+        [ -n "${_seen_names[$name]:-}" ] \
+            && die "line ${line_no}: duplicate rule name '$name' (first seen at line ${_seen_names[$name]})"
+        _seen_names["$name"]="$line_no"
+
+        # 监听端口只在同一协议族内要求唯一，v4/v6 可复用同端口
+        local port_key="${family}|${listen_port}"
+        [ -n "${_seen_ports[$port_key]:-}" ] \
+            && die "line ${line_no}: duplicate listen_port '$listen_port' for family '$family' (first seen at line ${_seen_ports[$port_key]})"
+        _seen_ports["$port_key"]="$line_no"
+
         if [ "$family" = "4" ]; then
-            validate_ipv4 "$source_ip" || die "line ${line_no}: source_ip must be IPv4"
+            validate_ipv4 "$source_ip" || die "line ${line_no}: source_ip must be valid IPv4: $source_ip"
         else
-            validate_ipv6 "$source_ip" || die "line ${line_no}: source_ip must be IPv6"
+            validate_ipv6 "$source_ip" || die "line ${line_no}: source_ip must be valid IPv6: $source_ip"
         fi
+
+        # 校验 source_ip 必须属于本机已有地址
+        validate_local_ip "$source_ip" \
+            || die "line ${line_no}: source_ip '$source_ip' is not assigned to any local interface"
 
         local resolved_ip
         resolved_ip=$(resolve_target "$target_host" "$family")
@@ -269,7 +336,8 @@ parse_config() {
                 ;;
             render)
                 emit_rule "$name" "$listen_port" "$target_host" "$target_port" \
-                          "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule"
+                          "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule" \
+                          "$force_limit"
                 ;;
             *)
                 die "unknown parse mode: $mode"
@@ -310,6 +378,8 @@ emit_rule() {
     local resolved_ip="$7"
     local rate_limit="${8:-}"
     local schedule="${9:-}"
+    # 第10个参数：force_limit=1 时强制生效限速，忽略时间段判断
+    local force_limit="${10:-0}"
     local comment nft_rate
 
     comment=$(comment_for_rule "$name" "$listen_port" "$target_host" "$target_port" "$source_ip" "$family" "$resolved_ip")
@@ -318,7 +388,10 @@ emit_rule() {
     # 判断限速是否当前应生效
     local limit_active=0
     if [ -n "$rate_limit" ]; then
-        if [ -z "$schedule" ]; then
+        if [ "$force_limit" = "1" ]; then
+            # 强制模式：忽略时间段判断，直接启用
+            limit_active=1
+        elif [ -z "$schedule" ]; then
             # 无时间段 → 全天限速
             limit_active=1
         elif schedule_is_active "$schedule"; then
@@ -355,6 +428,8 @@ emit_rule() {
 
 render_ruleset() {
     local config_file="$1"
+    # 第二个可选参数：force_limit，透传给 parse_config/emit_rule
+    local force_limit="${2:-0}"
 
     V4_PREROUTING=""; V4_POSTROUTING=""
     V6_PREROUTING=""; V6_POSTROUTING=""
@@ -362,7 +437,7 @@ render_ruleset() {
     V4_LIMIT="";      V6_LIMIT=""
     V4_LIMIT_COUNT=0; V6_LIMIT_COUNT=0
 
-    parse_config "$config_file" render
+    parse_config "$config_file" render "$force_limit"
 
     # ── IPv4 NAT 表 ──
     if [ "$V4_COUNT" -gt 0 ]; then
@@ -577,9 +652,9 @@ enable_limit() {
     require_command nft
     [ "$(id -u)" -eq 0 ] || die "must be run as root"
 
-    # 重新 sync 即可（emit_rule 会根据当前时间写入限速规则）
-    sync_rules "$config_file"
-    printf 'Rate limiting rules applied.\n'
+    # 强制模式：忽略 schedule 时间段判断，立即应用全部限速规则
+    sync_rules "$config_file" "1"
+    printf 'Rate limiting rules applied (force mode, schedule ignored).\n'
 }
 
 disable_limit() {
@@ -602,16 +677,19 @@ destroy_tables() {
 
 sync_rules() {
     local config_file="$1"
+    # 第二个可选参数：force_limit（由 enable_limit 传入）
+    local force_limit="${2:-0}"
 
     require_command nft
     require_command getent
+    require_command ip
     [ "$(id -u)" -eq 0 ] || die "sync must be run as root"
 
     TEMP_RULESET=$(mktemp)
     TEMP_APPLY_BATCH=$(mktemp)
     trap cleanup_temp_files EXIT
 
-    render_ruleset "$config_file" > "$TEMP_RULESET"
+    render_ruleset "$config_file" "$force_limit" > "$TEMP_RULESET"
     if [ -s "$TEMP_RULESET" ]; then
         nft -c -f "$TEMP_RULESET" || die "nft syntax check failed"
     fi
@@ -660,15 +738,22 @@ nft-dns-forward-sync v${VERSION}
 Usage:
   $0 show         [config_file]   # 查看配置和解析结果
   $0 render       [config_file]   # 渲染 nft 规则（不应用）
-  $0 sync         [config_file]   # 同步 nftables 规则
+  $0 sync         [config_file]   # 同步 nftables 规则（按时间段决定限速）
   $0 stats                        # 查看实时流量统计
   $0 save-stats   [config_file]   # 保存流量快照到日志
-  $0 enable-limit [config_file]   # 启用限速规则
+  $0 enable-limit [config_file]   # 强制启用限速规则（忽略时间段判断）
   $0 disable-limit                # 停用限速规则（清空 limit 表）
   $0 clear                        # 清空所有管理的 nftables 表
 
 Config format (8 fields, last 2 optional):
   name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
+
+Validation rules (codex5.4+):
+  - name 在同一配置文件内不允许重复
+  - listen_port 在同一协议族内不允许重复，IPv4/IPv6 可复用同端口
+  - source_ip 必须是本机已有的网卡地址（ip addr 可见）
+  - IPv6 校验更严格：排除链路本地(fe80)、环回(::1)、非法格式
+  - enable-limit 为强制模式，忽略 schedule 时间段，立即生效
 
 Examples:
   cloud-a|44288|example.com|51312|10.0.0.10|4
@@ -690,10 +775,12 @@ main() {
     case "$command" in
         show)
             require_command getent
+            require_command ip
             show_rules "$config_file"
             ;;
         render)
             require_command getent
+            require_command ip
             render_ruleset "$config_file"
             ;;
         sync)

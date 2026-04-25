@@ -2,6 +2,8 @@
 
 基于 nftables 的动态域名端口转发管理工具，支持流量统计与时间段限速。
 
+当前仓库保留 `main` 主线不变；本 README 对应 `codex5.4` 分支，它在 `v2.0` 基础上补充了一批输入校验和行为修正，见下文“codex5.4 分支增强”。
+
 ## 功能特点
 
 - **动态域名转发**：支持以域名作为转发目标，由 systemd timer 每 60s 自动重新解析 DNS，自动更新 nftables 规则
@@ -9,6 +11,14 @@
 - **灵活限速**：基于 nft meter 实现 per-source-IP token bucket 限速，支持按时间段自动切换（如仅夜间限速），也支持手动启用/停用
 - **交互式菜单**：提供完整的交互式管理界面，无需手动编辑 nftables 规则
 - **向后兼容**：新字段（限速、时间段）为可选字段，旧格式配置无需修改即可直接使用
+
+## codex5.4 分支增强
+
+- **手动启用限速行为已修正**：菜单 `r` 和 `enable-limit` 现在会忽略 `schedule`，立即强制应用所有限速规则
+- **`source_ip` 校验更严格**：不仅检查格式，还要求该地址必须实际存在于本机网卡
+- **配置冲突提前报错**：手工编辑配置文件时，重复规则名会直接报错；监听端口在同一协议族内也不允许重复
+- **IPv6 校验更严格**：过滤明显非法格式，并拒绝链路本地地址 `fe80::/10` 与环回地址 `::1`
+- **sysctl 路径统一**：菜单、安装、卸载统一使用 `/etc/sysctl.d/99-nft-dns-forward.conf`
 
 ## 文件结构
 
@@ -27,12 +37,12 @@
 > 使用 HTTPS 下载 zip 包，无需 git，不留 clone 记录。
 
 ```bash
-curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/main.zip \
+curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/codex5.4.zip \
   && unzip -q /tmp/nft_menus.zip -d /tmp \
-  && cd /tmp/nft_menus-main \
+  && cd /tmp/nft_menus-codex5.4 \
   && bash install.sh \
   && cd / \
-  && rm -rf /tmp/nft_menus.zip /tmp/nft_menus-main
+  && rm -rf /tmp/nft_menus.zip /tmp/nft_menus-codex5.4
 ```
 
 安装完成后：
@@ -48,7 +58,7 @@ sudo nft-dns-stats live
 ## 卸载
 
 ```bash
-curl -Lo /tmp/uninstall.sh https://raw.githubusercontent.com/utada1stlove/nft_menus/main/uninstall.sh \
+curl -Lo /tmp/uninstall.sh https://raw.githubusercontent.com/utada1stlove/nft_menus/codex5.4/uninstall.sh \
   && bash /tmp/uninstall.sh \
   && rm -f /tmp/uninstall.sh
 ```
@@ -71,9 +81,9 @@ sudo bash /opt/nft-dns-forward/uninstall.sh
 
 ```bash
 # 1. 下载解压
-curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/main.zip
+curl -Lo /tmp/nft_menus.zip https://github.com/utada1stlove/nft_menus/archive/refs/heads/codex5.4.zip
 unzip -q /tmp/nft_menus.zip -d /tmp
-cd /tmp/nft_menus-main
+cd /tmp/nft_menus-codex5.4
 
 # 2. 安装依赖
 apt install -y nftables bc python3   # Debian/Ubuntu
@@ -88,7 +98,7 @@ vim nft-dns-forward.conf
 sudo bash nft-dns-forward-menu.sh
 
 # 5. 清理临时文件（可选）
-rm -rf /tmp/nft_menus.zip /tmp/nft_menus-main
+rm -rf /tmp/nft_menus.zip /tmp/nft_menus-codex5.4
 ```
 
 ## 配置文件格式
@@ -107,7 +117,7 @@ name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
 | `listen_port` | ✅ | 本机公网监听端口（1-65535） |
 | `target_host` | ✅ | 转发目标，支持域名或 IP |
 | `target_port` | ✅ | 目标端口（1-65535） |
-| `source_ip` | ✅ | SNAT 出口 IP，必须是本机已有的 IP |
+| `source_ip` | ✅ | SNAT 出口 IP，必须是本机已有的全局地址，需能在 `ip addr` 中看到 |
 | `family` | ✅ | `4`（IPv4）/ `6`（IPv6）/ `auto`（自动判断） |
 | `rate_limit` | ⬜ | 限速值，留空=不限速。格式：数字+单位，支持 `mbps` `kbps` `mbit` `kbit` |
 | `schedule` | ⬜ | 限速时间段，留空=全天。格式：`HH:MM-HH:MM`，多段用逗号分隔，支持跨午夜 |
@@ -134,6 +144,13 @@ cloud-e|9003|example.com|9003|10.0.0.10|4|20mbps|08:00-12:00,14:00-18:00
 cloud-f|9004|example.com|9004|2001:db8::1|6||
 ```
 
+### 配置校验规则
+
+- 同一个配置文件内，`name` 不能重复
+- 同一个配置文件内，`listen_port` 在同一协议族内不能重复；IPv4 和 IPv6 可复用同一端口
+- `source_ip` 必须属于本机已有地址，否则 `show` / `render` / `sync` 会直接报错
+- `family=auto` 时，会根据 `source_ip` 自动推断 IPv4/IPv6
+
 ## 菜单说明
 
 运行 `sudo nft-dns-forward` 进入交互式菜单：
@@ -153,7 +170,7 @@ cloud-f|9004|example.com|9004|2001:db8::1|6||
   8. 清空所有生效规则
 
  ── 限速管理 ──
-  r. 手动启用限速规则
+  r. 手动启用限速规则（忽略时间段判断）
   s. 手动停用限速规则（清空 limit 表，下次 sync 恢复）
 
  ── 流量统计 ──
@@ -226,6 +243,11 @@ s → 立即清空 limit 表，所有规则恢复全速
     （下次 timer sync 时将重新按 schedule 判断）
 ```
 
+说明：
+
+- `5. 同步 nftables 规则` 会按 `schedule` 判断当前是否写入限速规则
+- `r. 手动启用限速规则` 是强制模式，会忽略 `schedule`，直到你手动停用或下一次正常 `sync` 按配置重新评估
+
 ### 限速实现原理
 
 使用 `nft meter` 实现 per-source-IP token bucket：
@@ -250,6 +272,7 @@ tcp dport 9002 meter cloud-d-lmt { ip saddr limit rate 10 mbytes/second } drop
 | 依赖 | 用途 |
 |------|------|
 | `nftables` | 防火墙规则管理 |
+| `ip` | 校验 `source_ip` 是否属于本机网卡（通常由 `iproute2` 提供） |
 | `getent` | DNS 解析（由 `libc-bin` 提供） |
 | `python3` | 解析 `nft -j` JSON 输出（流量统计） |
 | `bc` | 字节数格式化计算 |
@@ -264,7 +287,8 @@ tcp dport 9002 meter cloud-d-lmt { ip saddr limit rate 10 mbytes/second } drop
 
 | 分支 | 版本 | 说明 |
 |------|------|------|
-| [`main`](https://github.com/utada1stlove/nft_menus/tree/main) | v2.0（当前） | 动态域名转发 + 流量统计 + 时段限速 + 一键安装/卸载 |
+| `codex5.4` | v2.1（当前） | 修正手动限速行为，补强 `source_ip` / IPv6 / 重复配置校验，统一 sysctl 路径 |
+| [`main`](https://github.com/utada1stlove/nft_menus/tree/main) | v2.0 | 动态域名转发 + 流量统计 + 时段限速 + 一键安装/卸载 |
 | [`older`](https://github.com/utada1stlove/nft_menus/tree/older) | v1.0 | 原始版本，静态 IP 转发 + 基础域名转发，无统计无限速 |
 
 ### 安装旧版（older 分支）
@@ -297,7 +321,7 @@ nft delete table inet richang_port_forward_filter 2>/dev/null || true
 # 删除文件
 rm -f /etc/nftables/richang-port-forward.nft
 rm -f /etc/sysctl.d/99-richang-ip-forward.conf
-rm -f /etc/sysctl.d/99-ip-forward.conf
+rm -f /etc/sysctl.d/99-nft-dns-forward.conf
 rm -rf /tmp/nft_menus-older /tmp/nft_older.zip
 ```
 
