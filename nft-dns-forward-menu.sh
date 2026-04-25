@@ -508,7 +508,9 @@ EOF
 # ─── 菜单 ─────────────────────────────────────────────────────────────────────
 
 show_menu() {
-    clear
+    if [ -n "${TERM:-}" ] && [ "$TERM" != "dumb" ] && tput clear >/dev/null 2>&1; then
+        clear
+    fi
     printf "%bnft-dns-forward 动态域名转发管理 [v%s]%b\n\n" "${COLORS[CGREEN]}" "$VERSION" "${COLORS[CEND]}"
 
     print_color "CBLUE" " ── 基础配置 ──"

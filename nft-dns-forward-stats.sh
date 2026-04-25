@@ -39,11 +39,11 @@ require_command() {
 format_bytes() {
     local bytes="$1"
     if [ "$bytes" -ge 1073741824 ]; then
-        printf '%.2f GB' "$(echo "scale=2; $bytes/1073741824" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f GB", bytes / 1073741824 }'
     elif [ "$bytes" -ge 1048576 ]; then
-        printf '%.2f MB' "$(echo "scale=2; $bytes/1048576" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f MB", bytes / 1048576 }'
     elif [ "$bytes" -ge 1024 ]; then
-        printf '%.2f KB' "$(echo "scale=2; $bytes/1024" | bc)"
+        awk -v bytes="$bytes" 'BEGIN { printf "%.2f KB", bytes / 1024 }'
     else
         printf '%s B' "$bytes"
     fi
@@ -138,9 +138,8 @@ collect_counters() {
 cmd_live() {
     require_command nft
     require_command python3
-    require_command bc
 
-    declare -A rx_pkts rx_bytes tx_pkts tx_bytes
+    declare -A rx_pkts=() rx_bytes=() tx_pkts=() tx_bytes=()
     collect_counters
 
     if [ "${#rx_pkts[@]}" -eq 0 ] && [ "${#tx_pkts[@]}" -eq 0 ]; then
@@ -159,7 +158,7 @@ cmd_live() {
     printf '%s\n' "$(printf '─%.0s' {1..90})"
 
     # 合并所有规则名并排序
-    declare -A all_names
+    declare -A all_names=()
     for n in "${!rx_pkts[@]}" "${!tx_pkts[@]}"; do all_names["$n"]=1; done
 
     local total_rx_bytes=0 total_tx_bytes=0

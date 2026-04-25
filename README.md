@@ -76,9 +76,9 @@ unzip -q /tmp/nft_menus.zip -d /tmp
 cd /tmp/nft_menus-main
 
 # 2. 安装依赖
-apt install -y nftables bc python3   # Debian/Ubuntu
+apt install -y nftables python3      # Debian/Ubuntu
 # 或
-dnf install -y nftables bc python3   # CentOS/Rocky
+dnf install -y nftables python3      # CentOS/Rocky
 
 # 3. 复制配置文件并编辑
 cp nft-dns-forward.conf.example nft-dns-forward.conf
@@ -252,7 +252,7 @@ tcp dport 9002 meter cloud-d-lmt { ip saddr limit rate 10 mbytes/second } drop
 | `nftables` | 防火墙规则管理 |
 | `getent` | DNS 解析（由 `libc-bin` 提供） |
 | `python3` | 解析 `nft -j` JSON 输出（流量统计） |
-| `bc` | 字节数格式化计算 |
+| `awk` | 字节数格式化计算 |
 | `systemd` | 定时任务（可选） |
 
 ## 系统要求

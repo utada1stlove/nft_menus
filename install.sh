@@ -58,13 +58,13 @@ detect_os() {
 
 install_deps() {
     local os="$1"
-    step "安装依赖（nftables, bc, python3）"
+    step "安装依赖（nftables, python3）"
 
     case "$os" in
         debian)
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-                nftables bc python3
+                nftables python3
 
             # 如果 ufw 在跑，提示可能冲突
             if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -73,20 +73,19 @@ install_deps() {
             ;;
         centos)
             if command -v dnf >/dev/null 2>&1; then
-                dnf install -y nftables bc python3
+                dnf install -y nftables python3
             else
-                yum install -y nftables bc python3
+                yum install -y nftables python3
             fi
             ;;
         *)
-            die "不支持的发行版，请手动安装: nftables bc python3"
+            die "不支持的发行版，请手动安装: nftables python3"
             ;;
     esac
 
     # 验证关键命令
     command -v nft     >/dev/null 2>&1 || die "nft 安装失败"
     command -v python3 >/dev/null 2>&1 || die "python3 安装失败"
-    command -v bc      >/dev/null 2>&1 || die "bc 安装失败"
     command -v getent  >/dev/null 2>&1 || die "getent 不可用（通常由 libc-bin 提供）"
 
     info "依赖安装完成"
@@ -274,7 +273,7 @@ main() {
     info "检测到系统: ${os}"
 
     if [ "$os" = "unknown" ]; then
-        warn "无法自动识别系统，将尝试跳过包安装（确保已手动安装 nftables bc python3）"
+        warn "无法自动识别系统，将尝试跳过包安装（确保已手动安装 nftables python3）"
         read -r -p "继续安装？[y/N] " confirm
         [[ "${confirm:-n}" =~ ^[yY]$ ]] || { info "已取消"; exit 0; }
     else
