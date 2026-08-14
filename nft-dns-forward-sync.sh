@@ -210,10 +210,10 @@ parse_config() {
         [ -z "$trimmed_line" ] && continue
         case "$trimmed_line" in \#*) continue ;; esac
 
-        # 最多8个字段，多余报错
-        local name listen_port target_host target_port source_ip family rate_limit schedule extra
-        IFS='|' read -r name listen_port target_host target_port source_ip family rate_limit schedule extra <<< "$raw_line"
-        [ -z "${extra:-}" ] || die "line ${line_no}: too many fields (max 8)"
+        # 最多9个字段，多余报错；protocol 是新增可选字段，旧配置默认 TCP
+        local name listen_port target_host target_port source_ip family rate_limit schedule protocol extra
+        IFS='|' read -r name listen_port target_host target_port source_ip family rate_limit schedule protocol extra <<< "$raw_line"
+        [ -z "${extra:-}" ] || die "line ${line_no}: too many fields (max 9)"
 
         name=$(trim "${name:-}")
         listen_port=$(trim "${listen_port:-}")
@@ -223,6 +223,11 @@ parse_config() {
         family=$(trim "${family:-auto}")
         rate_limit=$(trim "${rate_limit:-}")
         schedule=$(trim "${schedule:-}")
+        protocol=$(trim "${protocol:-tcp}")
+        case "${protocol,,}" in
+            tcp|udp|both) protocol="${protocol,,}" ;;
+            *) die "line ${line_no}: invalid protocol '$protocol' (use tcp, udp, or both)" ;;
+        esac
 
         # 必填字段
         [ -n "$name" ]        || die "line ${line_no}: name is required"
@@ -265,11 +270,11 @@ parse_config() {
             show)
                 printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
                     "$name" "$listen_port" "$target_host" "$target_port" \
-                    "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule"
+                    "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule" "$protocol"
                 ;;
             render)
                 emit_rule "$name" "$listen_port" "$target_host" "$target_port" \
-                          "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule"
+                          "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule" "$protocol"
                 ;;
             *)
                 die "unknown parse mode: $mode"
@@ -310,6 +315,7 @@ emit_rule() {
     local resolved_ip="$7"
     local rate_limit="${8:-}"
     local schedule="${9:-}"
+    local protocol="${10:-tcp}"
     local comment nft_rate
 
     comment=$(comment_for_rule "$name" "$listen_port" "$target_host" "$target_port" "$source_ip" "$family" "$resolved_ip")
@@ -328,28 +334,29 @@ emit_rule() {
 
     if [ "$family" = "4" ]; then
         V4_COUNT=$((V4_COUNT + 1))
-        # prerouting: DNAT + counter
-        V4_PREROUTING="${V4_PREROUTING}        tcp dport ${listen_port} counter dnat to ${resolved_ip}:${target_port} comment \"${comment}\"\n"
-        # postrouting: SNAT + counter
-        V4_POSTROUTING="${V4_POSTROUTING}        ip daddr ${resolved_ip} tcp dport ${target_port} counter snat to ${source_ip} comment \"${comment}\"\n"
-
-        # 限速规则加入 limit 表
-        if [ "$limit_active" -eq 1 ]; then
-            nft_rate=$(rate_to_nft "$rate_limit")
-            V4_LIMIT_COUNT=$((V4_LIMIT_COUNT + 1))
-            # 用 meter 对每个源 IP 单独限速
-            V4_LIMIT="${V4_LIMIT}        tcp dport ${listen_port} meter ${name}-lmt { ip saddr limit rate ${nft_rate} } drop comment \"limit|${name}\"\n"
-        fi
+        for proto in tcp udp; do
+            [ "$protocol" = "$proto" ] || [ "$protocol" = "both" ] || continue
+            V4_PREROUTING="${V4_PREROUTING}        ${proto} dport ${listen_port} counter dnat to ${resolved_ip}:${target_port} comment \"${comment}|${proto}\"\n"
+            V4_POSTROUTING="${V4_POSTROUTING}        ip daddr ${resolved_ip} ${proto} dport ${target_port} counter snat to ${source_ip} comment \"${comment}|${proto}\"\n"
+            if [ "$limit_active" -eq 1 ]; then
+                nft_rate=$(rate_to_nft "$rate_limit")
+                V4_LIMIT_COUNT=$((V4_LIMIT_COUNT + 1))
+                # forward 链看到的是 DNAT 后的目标端口，因此匹配 target_port
+                V4_LIMIT="${V4_LIMIT}        ${proto} dport ${target_port} meter ${name}-${proto}-lmt { ip saddr limit rate ${nft_rate} } drop comment \"limit|${name}|${proto}\"\n"
+            fi
+        done
     else
         V6_COUNT=$((V6_COUNT + 1))
-        V6_PREROUTING="${V6_PREROUTING}        tcp dport ${listen_port} counter dnat to [${resolved_ip}]:${target_port} comment \"${comment}\"\n"
-        V6_POSTROUTING="${V6_POSTROUTING}        ip6 daddr ${resolved_ip} tcp dport ${target_port} counter snat to ${source_ip} comment \"${comment}\"\n"
-
-        if [ "$limit_active" -eq 1 ]; then
-            nft_rate=$(rate_to_nft "$rate_limit")
-            V6_LIMIT_COUNT=$((V6_LIMIT_COUNT + 1))
-            V6_LIMIT="${V6_LIMIT}        tcp dport ${listen_port} meter ${name}-lmt6 { ip6 saddr limit rate ${nft_rate} } drop comment \"limit|${name}\"\n"
-        fi
+        for proto in tcp udp; do
+            [ "$protocol" = "$proto" ] || [ "$protocol" = "both" ] || continue
+            V6_PREROUTING="${V6_PREROUTING}        ${proto} dport ${listen_port} counter dnat to [${resolved_ip}]:${target_port} comment \"${comment}|${proto}\"\n"
+            V6_POSTROUTING="${V6_POSTROUTING}        ip6 daddr ${resolved_ip} ${proto} dport ${target_port} counter snat to ${source_ip} comment \"${comment}|${proto}\"\n"
+            if [ "$limit_active" -eq 1 ]; then
+                nft_rate=$(rate_to_nft "$rate_limit")
+                V6_LIMIT_COUNT=$((V6_LIMIT_COUNT + 1))
+                V6_LIMIT="${V6_LIMIT}        ${proto} dport ${target_port} meter ${name}-${proto}-lmt6 { ip6 saddr limit rate ${nft_rate} } drop comment \"limit|${name}|${proto}\"\n"
+            fi
+        done
     fi
 }
 
@@ -558,14 +565,14 @@ show_rules() {
     [ -n "$output" ] || die "no valid rules found in config"
 
     printf '\n'
-    printf '%-20s %-8s %-32s %-8s %-18s %-6s %-12s %s\n' \
-        "name" "listen" "target_host" "t_port" "source_ip" "family" "rate_limit" "schedule"
+    printf '%-20s %-8s %-32s %-8s %-18s %-6s %-8s %-12s %s\n' \
+        "name" "listen" "target_host" "t_port" "source_ip" "family" "protocol" "rate_limit" "schedule"
     printf '%s\n' "$(printf '─%.0s' {1..110})"
 
-    printf '%s\n' "$output" | while IFS='|' read -r name listen target_host target_port source_ip family resolved_ip rate_limit schedule; do
-        printf '%-20s %-8s %-32s %-8s %-18s %-6s %-12s %s\n' \
+    printf '%s\n' "$output" | while IFS='|' read -r name listen target_host target_port source_ip family resolved_ip rate_limit schedule protocol; do
+        printf '%-20s %-8s %-32s %-8s %-18s %-6s %-8s %-12s %s\n' \
             "$name" "$listen" "$target_host" "$target_port" "$source_ip" "$family" \
-            "${rate_limit:--}" "${schedule:--}"
+            "$protocol" "${rate_limit:--}" "${schedule:--}"
     done
     printf '\n'
 }
@@ -667,8 +674,9 @@ Usage:
   $0 disable-limit                # 停用限速规则（清空 limit 表）
   $0 clear                        # 清空所有管理的 nftables 表
 
-Config format (8 fields, last 2 optional):
-  name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
+Config format (up to 9 fields, last 3 optional):
+  name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule|protocol
+  protocol: tcp (default), udp, or both
 
 Examples:
   cloud-a|44288|example.com|51312|10.0.0.10|4

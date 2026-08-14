@@ -94,10 +94,10 @@ rm -rf /tmp/nft_menus.zip /tmp/nft_menus-main
 ## 配置文件格式
 
 ```
-name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
+name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule|protocol
 ```
 
-后两个字段（`rate_limit` 和 `schedule`）为**可选字段**，省略或留空均可。
+后三个字段（`rate_limit`、`schedule` 和 `protocol`）为**可选字段**，省略或留空均可；`protocol` 默认是 `tcp`。
 
 ### 字段说明
 
@@ -111,6 +111,7 @@ name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
 | `family` | ✅ | `4`（IPv4）/ `6`（IPv6）/ `auto`（自动判断） |
 | `rate_limit` | ⬜ | 限速值，留空=不限速。格式：数字+单位，支持 `mbps` `kbps` `mbit` `kbit` |
 | `schedule` | ⬜ | 限速时间段，留空=全天。格式：`HH:MM-HH:MM`，多段用逗号分隔，支持跨午夜 |
+| `protocol` | ⬜ | `tcp`、`udp` 或 `both`，留空默认为 `tcp` |
 
 ### 配置示例
 
@@ -118,8 +119,8 @@ name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
 # 纯转发，不限速（最简格式）
 cloud-a|44288|example.com|51312|10.0.0.10|4
 
-# 纯转发，不限速（8字段完整格式）
-cloud-b|8888|example.com|8888|10.0.0.10|4||
+# 纯 TCP 转发，不限速（9字段完整格式）
+cloud-b|8888|example.com|8888|10.0.0.10|4|||tcp
 
 # 全天限速 50mbps
 cloud-c|9001|example.com|9001|10.0.0.10|4|50mbps|
@@ -132,6 +133,15 @@ cloud-e|9003|example.com|9003|10.0.0.10|4|20mbps|08:00-12:00,14:00-18:00
 
 # IPv6 转发
 cloud-f|9004|example.com|9004|2001:db8::1|6||
+
+# UDP 转发
+dns-udp|5353|1.1.1.1|53|10.0.0.10|4|||udp
+
+# TCP + UDP 转发
+game-both|30000|example.com|30000|10.0.0.10|4|||both
+
+# IPv4 UDP 转发：22:00-08:00 限速 10mbit，其余时间不限速
+dns-udp-limit|5354|1.1.1.1|53|10.0.0.10|4|10mbit|22:00-08:00|udp
 ```
 
 ## 菜单说明

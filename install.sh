@@ -154,12 +154,15 @@ install_scripts() {
         fi
         cat > "$CONFIG_FILE" <<'EOF'
 # nft-dns-forward.conf
-# 格式: name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
-# 后两个字段可选，留空即可
+# 格式: name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule|protocol
+# 后三个字段可选，留空即可；protocol 可填 tcp、udp 或 both
 # 示例（删除此行后填写你的规则）:
 # cloud-a|44288|example.com|51312|10.0.0.10|4
 # cloud-b|8888|example.com|8888|10.0.0.10|4|50mbps|
 # cloud-c|9999|example.com|9999|10.0.0.10|4|10mbps|22:00-08:00
+# dns-udp|5353|1.1.1.1|53|10.0.0.10|4|||udp
+# game-both|30000|example.com|30000|10.0.0.10|4|||both
+# dns-udp-limit|5354|1.1.1.1|53|10.0.0.10|4|10mbit|22:00-08:00|udp
 EOF
         info "已创建配置文件: ${CONFIG_FILE}"
     else

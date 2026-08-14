@@ -95,12 +95,15 @@ ensure_config_file() {
     [ -f "$CONFIG_FILE" ] && return 0
     cat > "$CONFIG_FILE" <<'EOF'
 # nft-dns-forward.conf
-# 格式: name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
-# 后两个字段可选，留空即可
+# 格式: name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule|protocol
+# 后三个字段可选，留空即可；protocol 可填 tcp、udp 或 both
 # 示例:
 # cloud-a|44288|example.com|51312|10.0.0.10|4
 # cloud-b|8888|example.com|8888|10.0.0.10|4|50mbps|
 # cloud-c|9999|example.com|9999|10.0.0.10|4|10mbps|22:00-08:00
+# dns-udp|5353|1.1.1.1|53|10.0.0.10|4|||udp
+# game-both|30000|example.com|30000|10.0.0.10|4|||both
+# dns-udp-limit|5354|1.1.1.1|53|10.0.0.10|4|10mbit|22:00-08:00|udp
 EOF
     print_color "CGREEN" "[信息] 已创建配置文件: ${CONFIG_FILE}"
 }
@@ -186,7 +189,7 @@ show_config_rules() {
     echo
     print_color "CGREEN" "========== 当前配置 =========="
 
-    while IFS='|' read -r name listen_port target_host target_port source_ip family rate_limit schedule; do
+    while IFS='|' read -r name listen_port target_host target_port source_ip family rate_limit schedule protocol; do
         name=$(sanitize_input "${name:-}")
         [ -z "$name" ] && continue
         case "$name" in \#*) continue ;; esac
@@ -198,11 +201,12 @@ show_config_rules() {
         family=$(sanitize_input "${family:-}")
         rate_limit=$(sanitize_input "${rate_limit:-}")
         schedule=$(sanitize_input "${schedule:-}")
+        protocol=$(sanitize_input "${protocol:-tcp}")
 
         count=$((count + 1))
         printf "%b%d.%b %s\n" "${COLORS[CGREEN]}" "$count" "${COLORS[CEND]}" "$name"
         printf "   监听端口: %s  →  目标: %s:%s\n" "$listen_port" "$target_host" "$target_port"
-        printf "   出口 IP:  %s  |  协议族: %s\n" "$source_ip" "$family"
+        printf "   出口 IP:  %s  |  协议族: %s  |  协议: %s\n" "$source_ip" "$family" "$protocol"
         if [ -n "$rate_limit" ]; then
             local sched_str="${schedule:-全天}"
             printf "   限速:     %s  |  时间段: %s\n" "$rate_limit" "$sched_str"
@@ -220,7 +224,7 @@ show_config_rules() {
 # ─── 添加规则 ─────────────────────────────────────────────────────────────────
 
 add_rule() {
-    local name listen_port target_host target_port family source_ip rate_limit schedule
+    local name listen_port target_host target_port family source_ip rate_limit schedule protocol
 
     ensure_config_file
 
@@ -273,6 +277,16 @@ add_rule() {
         print_color "CRED" "[错误] auto 模式下仍然需要一个有效的 source_ip"; return 1
     fi
 
+    echo
+    print_color "CGREEN" "请选择转发协议"
+    echo "  1. TCP"
+    echo "  2. UDP"
+    echo "  3. TCP + UDP"
+    read -r -p "请选择 [1-3]（默认 1）: " protocol
+    case "${protocol:-1}" in
+        1) protocol="tcp" ;; 2) protocol="udp" ;; 3) protocol="both" ;; *) protocol="tcp" ;;
+    esac
+
     # 限速（可选）
     echo
     print_color "CGREEN" "限速配置（可选，直接回车跳过）"
@@ -294,13 +308,13 @@ add_rule() {
     # 确认
     echo
     print_color "CGREEN" "将写入以下规则："
-    printf "  %s|%s|%s|%s|%s|%s|%s|%s\n" \
+    printf "  %s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
         "$name" "$listen_port" "$target_host" "$target_port" \
-        "$source_ip" "$family" "$rate_limit" "$schedule"
+        "$source_ip" "$family" "$rate_limit" "$schedule" "$protocol"
     echo
     read -r -p "按回车确认写入，CTRL+C 取消: " _
 
-    printf '%s\n' "${name}|${listen_port}|${target_host}|${target_port}|${source_ip}|${family}|${rate_limit}|${schedule}" >> "$CONFIG_FILE"
+    printf '%s\n' "${name}|${listen_port}|${target_host}|${target_port}|${source_ip}|${family}|${rate_limit}|${schedule}|${protocol}" >> "$CONFIG_FILE"
     print_color "CGREEN" "[信息] 规则已写入配置文件"
 }
 

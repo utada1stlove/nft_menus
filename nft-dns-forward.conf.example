@@ -3,7 +3,7 @@
 #
 # ─── 格式 ────────────────────────────────────────────────────────────────────
 #
-#   name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule
+#   name|listen_port|target_host|target_port|source_ip|family|rate_limit|schedule|protocol
 #
 # ─── 字段说明 ─────────────────────────────────────────────────────────────────
 #
@@ -46,10 +46,13 @@
 #     08:00-12:00,14:00-18:00        → 上午 8-12 点 + 下午 14-18 点
 #     22:00-08:00,12:00-14:00        → 跨午夜 + 中午
 #
+# protocol  【可选，默认 tcp】
+#   tcp / udp / both
+#
 # ─── 注意事项 ─────────────────────────────────────────────────────────────────
 #
 # 1. rate_limit 和 schedule 是可选字段，可以省略或留空
-#    以下三种写法等价（均表示不限速）：
+#    以下三种写法等价（均表示 TCP、不限速；省略 protocol 时默认 tcp）：
 #      cloud-a|44288|example.com|51312|10.0.0.10|4
 #      cloud-a|44288|example.com|51312|10.0.0.10|4||
 #      cloud-a|44288|example.com|51312|10.0.0.10|4|  |
@@ -68,8 +71,8 @@
 # 示例 1: 纯转发，不限速（最简格式）
 cloud-a|44288|example.com|51312|10.0.0.10|4
 
-# 示例 2: 纯转发，不限速（8字段完整格式）
-cloud-b|8888|example.com|8888|10.0.0.10|4||
+# 示例 2: 纯 TCP 转发，不限速（9字段完整格式）
+cloud-b|8888|example.com|8888|10.0.0.10|4|||tcp
 
 # 示例 3: 全天限速 50mbps
 cloud-c|9001|example.com|9001|10.0.0.10|4|50mbps|
@@ -85,3 +88,12 @@ cloud-f|9004|example.com|9004|2001:db8::1|6||
 
 # 示例 7: auto 模式（根据 source_ip 自动判断 IPv4）
 cloud-g|9005|example.com|9005|10.0.0.10|auto||
+
+# 示例 8: UDP 转发
+dns-udp|5353|1.1.1.1|53|10.0.0.10|4|||udp
+
+# 示例 9: TCP + UDP 转发
+game-both|30000|example.com|30000|10.0.0.10|4|||both
+
+# 示例 10: IPv4 UDP 转发，22:00-08:00 限速 10mbit，其余时间不限速
+dns-udp-limit|5354|1.1.1.1|53|10.0.0.10|4|10mbit|22:00-08:00|udp
