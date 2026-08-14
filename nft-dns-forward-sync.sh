@@ -268,7 +268,7 @@ parse_config() {
 
         case "$mode" in
             show)
-                printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+                printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
                     "$name" "$listen_port" "$target_host" "$target_port" \
                     "$source_ip" "$family" "$resolved_ip" "$rate_limit" "$schedule" "$protocol"
                 ;;
